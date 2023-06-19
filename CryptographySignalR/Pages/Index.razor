@@ -1,0 +1,93 @@
+﻿@page "/"
+@inject NavigationManager NavManager
+
+<PageTitle>LivetahC</PageTitle>
+<style>
+    body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 0;
+        background-color: #b0f5d6;
+    }
+
+    header {
+        background: linear-gradient(#0cebeb, #20e3b2, #29ffc6);
+        padding: 20px;
+        border-radius: 4px;
+    }
+
+    .app-title {
+        margin: 0;
+        color: #333;
+        text-align: center;
+    }
+
+    main {
+        padding: 20px;
+    }
+
+    .description {
+        margin-bottom: 20px;
+        text-align: center;
+        color: #777;
+    }
+
+    .form-container {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-wrap: wrap;
+    }
+
+    .text-input {
+        padding: 10px;
+        margin-right: 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+    }
+
+    .submit-button {
+        padding: 10px 20px;
+        background-color: #4caf50;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+    }
+</style>
+<body>
+    <header>
+        <h1 class="app-title">Welcome to LivetahC</h1>
+    </header>
+    <main>
+        <p class="description">Enter your username to chat with people</p>
+        <div class="form-container">
+            <input type="text" class="text-input" @bind="username" placeholder="Ex. Peter" />
+            <button class="submit-button" @onclick="SetUser">GO TO CHAT</button>
+        </div>
+    </main>
+</body>
+
+
+@code {
+    private static string username = string.Empty;
+    private string passUsername = string.Empty;
+    private static Random random = new Random();
+
+    private void SetUser()
+    {
+        passUsername = username;
+        username = string.Empty;
+
+        if (passUsername.Length <= 0)
+            passUsername = "Guest" + RandomString();
+        NavManager.NavigateTo($"chat/{passUsername}");
+    }
+
+    public static string RandomString()
+    {
+        const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+        return new string(Enumerable.Repeat(chars, 10)
+            .Select(s => s[random.Next(s.Length)]).ToArray());
+    }
+}

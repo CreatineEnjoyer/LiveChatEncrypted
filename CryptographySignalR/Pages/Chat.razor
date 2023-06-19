@@ -1,0 +1,352 @@
+﻿@page "/chat/{username}"
+@using Microsoft.AspNetCore.SignalR.Client
+@inject NavigationManager NavigationMngr
+@implements IAsyncDisposable
+
+<PageTitle>MainPage</PageTitle>
+
+<style>
+    body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 0;
+        background-color: #b0f5d6;
+    }
+
+    header {
+        background: linear-gradient(#0cebeb, #20e3b2, #29ffc6);
+        padding: 20px;
+        border-radius: 4px;
+    }
+
+    .app-title {
+        margin: 0;
+        color: #333;
+        text-align: center;
+    }
+
+    main {
+        padding: 20px;
+    }
+
+    .user-container {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        border-radius: 15px;
+        background-color: #f0f0f0;
+        max-width: 29%;
+    }
+
+    .user-list {
+        list-style-type: none;
+        padding-left: 10px;
+        flex-grow: 1;
+        overflow-y: auto;
+        margin-bottom: 20px;
+    }
+
+    .message-list li {
+        margin-bottom: 10px;
+    }
+
+    .messege-container {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+    }
+
+    .message-list {
+        list-style-type: none;
+        padding: 10px;
+        flex-grow: 1;
+        overflow-y: auto;
+        margin-bottom: 20px;
+    }
+
+    .message-list li {
+        margin-bottom: 10px;
+    }
+
+    .bubble {
+        border-radius: 15px;
+        background-color: #f0f0f0;
+        padding: 5px;
+        padding-left: 10px;
+        padding-right: 10px;
+        width: fit-content;
+        max-width: 70%;
+    }
+
+    .input-container {
+        display: flex;
+    }
+
+    .text-input {
+        padding: 10px;
+        margin-right: 10px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        flex-grow: 1;
+    }
+
+    .send-button {
+        padding: 10px 20px;
+        background-color: #4caf50;
+        color: #fff;
+        border: none;
+        border-radius: 4px;
+        cursor: pointer;
+    }
+
+    footer {
+        background: linear-gradient(#0cebeb, #20e3b2, #29ffc6);
+        padding: 10px;
+        text-align: center;
+        border-radius: 4px;
+    }
+
+    .footer-text {
+        margin: 0;
+        color: #333;
+    }
+
+</style>
+<body>
+    <header>
+        <h1 class="app-title">Chat with others in LivetahC</h1>
+    </header>
+    <main>
+        <div class="user-container">
+            <p class="user-list">List of active users:</p>
+            <ul class="user-list">
+                @foreach (var user in UserPublicKeyDH.Keys)
+                {
+                    <li>@user</li>
+                }
+            </ul>
+        </div>
+        <div class="messege-container">
+            <ul class="message-list">
+                @foreach (var message in messages)
+                {
+                    <li class="bubble">@message</li>
+                }
+            </ul>
+            <div class="input-container">
+                <input type="text" class="text-input" @bind="receiver" placeholder="Enter receiver username">
+                <input type="text" class="text-input" @bind="messageInput" placeholder="Type your message">
+                <button class="send-button" @onclick="Send">SEND</button>
+            </div>
+        </div>
+    </main>
+    <footer>
+        <p class="footer-text">© 2023 LivetahC. All rights I don't know, if they are reserved.</p>
+    </footer>
+</body>
+
+
+@code {
+    [Parameter]
+    public string username { get; set;}
+
+    private string otherPublicKeyDH = string.Empty;
+    private string otherPublicKeyRSA = string.Empty;
+    private HubConnection hubConnection;
+    private List<string> messages = new();
+
+    private static string receiver = string.Empty;
+    private static string messageInput = string.Empty;
+    private static byte[]? iv = null;
+    private static byte[]? computedSharedSecret;
+    public static Dictionary<string, byte[]> UserPublicKeyDH = new();
+    public static Dictionary<string, string> UserPublicKeyRSA = new();
+
+    System.Security.Cryptography.ECDiffieHellmanCng? diffieHellmanCng;
+    System.Security.Cryptography.RSACng? rsaCng;
+
+
+    /// <summary>
+    /// Asynchronous method used for establishing connection and receiving data from others 
+    /// </summary>
+    protected override async Task OnInitializedAsync()
+    {
+        hubConnection = new HubConnectionBuilder()
+            .WithUrl(NavigationMngr.ToAbsoluteUri("/chathub"))
+            .WithAutomaticReconnect()
+            .Build();
+
+        rsaCng = new System.Security.Cryptography.RSACng();
+        diffieHellmanCng = new System.Security.Cryptography.ECDiffieHellmanCng();
+        try
+        {
+            otherPublicKeyRSA = GetKeyString(rsaCng.ExportParameters(false));
+            otherPublicKeyDH = Convert.ToBase64String(Crypto.CryptoDH.DHGenerateKey(diffieHellmanCng));
+
+            await hubConnection.StartAsync();
+
+            messages.Add($"Other person established connection with {username}");
+        }
+        catch (Exception ex)
+        {
+            messages.Add($"{ex.Message}");
+        }
+
+        await hubConnection.InvokeAsync("SendPublicKey", username, otherPublicKeyDH, otherPublicKeyRSA, receiver);
+
+
+        byte[]? receivedPublicKeyDH = null;
+
+        /// <summary>
+        /// Handler used for receving public keys sent from other person
+        /// </summary>
+        hubConnection.On<string, string, string, string>("ReceivePublicKey", (sender, otherPublicKeyDH, otherPublicKeyRSA, receiver) =>
+        {
+            receivedPublicKeyDH = Convert.FromBase64String(otherPublicKeyDH);
+
+            if (sender.Length > 0)
+            {
+                if (!UserPublicKeyDH.ContainsKey(sender))
+                    UserPublicKeyDH.TryAdd(sender, receivedPublicKeyDH);
+
+                if (!UserPublicKeyRSA.ContainsKey(sender))
+                    UserPublicKeyRSA.TryAdd(sender, otherPublicKeyRSA);
+            }
+        });
+
+        while (receivedPublicKeyDH == null)
+        {
+            await Task.Delay(100);
+        }
+
+
+        /// <summary>
+        /// Handler, that is used for receiving and decrypting message
+        /// </summary>
+        hubConnection.On<string, byte[], bool, string, byte[], byte[]>("ReceiveMessage", (sender, encryptedMessageRSA, isReceiver, receiver, signedMessage, messageAES) =>
+        {
+            string decryptedMessageAES = string.Empty;
+
+            if (isReceiver && encryptedMessageRSA != null && (receiver == username || sender == username) && UserPublicKeyRSA.ContainsKey(sender))
+            {
+                byte[]? decryptedMessageRSA = null;
+                byte[]? receiverSecret = null;
+                byte[]? decryptedMessageRSAReceiverPrivate = null;
+                bool verifyMessageRSASenderPublic = false;
+
+                receiverSecret = Crypto.CryptoDH.DHCalculateSharedSecret(UserPublicKeyDH[sender], diffieHellmanCng);
+                receiverSecret = Crypto.CryptoSHA.SHA256HashData(receiverSecret);
+                if (receiver == username)
+                {
+                    if (messageAES != null)
+                        decryptedMessageAES = Crypto.CryptoAES.DecryptMessage(messageAES, receiverSecret, iv);
+
+                    decryptedMessageRSAReceiverPrivate = Crypto.CryptoRSA.RSADecrypt(encryptedMessageRSA, rsaCng.ExportParameters(true));
+                    if (decryptedMessageRSAReceiverPrivate != null)
+                        verifyMessageRSASenderPublic = Crypto.CryptoRSA.RSAVerifyMessage(decryptedMessageRSAReceiverPrivate, GetKeyParams(UserPublicKeyRSA[sender]), signedMessage);
+
+                    if (verifyMessageRSASenderPublic && decryptedMessageAES != null)
+                    {
+                        var hashDecryptedMessageAES = Crypto.CryptoSHA.SHA256HashData(System.Text.Encoding.UTF8.GetBytes(decryptedMessageAES));
+                        if (System.Collections.StructuralComparisons.StructuralEqualityComparer.Equals(hashDecryptedMessageAES, decryptedMessageRSAReceiverPrivate))
+                        {
+                            var encodedMessage = $"{sender}: {decryptedMessageAES}";
+                            messages.Add(encodedMessage);
+                        }
+                    } 
+                }
+                else if (sender == username)
+                {
+                    decryptedMessageRSA = messageAES;
+                    receiverSecret = computedSharedSecret;
+                    if (decryptedMessageRSA != null)
+                    {
+                        decryptedMessageAES = Crypto.CryptoAES.DecryptMessage(decryptedMessageRSA, receiverSecret, iv);
+                        var encodedMessage = $"{sender}: {decryptedMessageAES}";
+                        messages.Add(encodedMessage);
+                    }
+                } 
+            }
+            InvokeAsync(StateHasChanged);
+        });
+    }
+
+
+    /// <summary>
+    /// Asynchronous method used for enrypting and sending messages
+    /// </summary>
+    private async Task Send()
+    {
+        await hubConnection.InvokeAsync("SendPublicKey", username, otherPublicKeyDH, otherPublicKeyRSA, receiver);
+
+        if (hubConnection is not null && messageInput is not null && username.Length > 0)
+        {
+            if (messageInput.Length <= 0)
+            {
+                messages.Add("Empty message!");
+                return;
+            }
+
+            if (UserPublicKeyDH.ContainsKey(receiver))
+                computedSharedSecret = Crypto.CryptoDH.DHCalculateSharedSecret(UserPublicKeyDH[receiver], diffieHellmanCng);
+            else
+                messages.Add("Person you are trying to reach does not exist!");
+
+            byte[]? encryptedMessageAES = null;
+            if(computedSharedSecret is not null)
+            {
+                computedSharedSecret = Crypto.CryptoSHA.SHA256HashData(computedSharedSecret);
+                encryptedMessageAES = Crypto.CryptoAES.EncryptMessage(messageInput, computedSharedSecret, out iv);
+            }
+
+            byte[]? signedMessageRSASenderPrivate = null;
+            byte[]? encryptedMessageRSAReceiverPublic = null;
+            if (UserPublicKeyRSA.ContainsKey(receiver))
+            {
+                var hashedMessage = Crypto.CryptoSHA.SHA256HashData(System.Text.Encoding.UTF8.GetBytes(messageInput));
+
+                signedMessageRSASenderPrivate = Crypto.CryptoRSA.RSASignMessage(hashedMessage, rsaCng.ExportParameters(true));
+
+                encryptedMessageRSAReceiverPublic = Crypto.CryptoRSA.RSAEncrypt(hashedMessage, GetKeyParams(UserPublicKeyRSA[receiver]));
+
+                await hubConnection.SendAsync("SendMessage", username, encryptedMessageRSAReceiverPublic, receiver, signedMessageRSASenderPrivate, encryptedMessageAES);
+            }
+            messageInput = string.Empty;
+            receiver = string.Empty;
+        }
+    }
+
+
+    public bool IsConnected =>
+        hubConnection?.State == HubConnectionState.Connected;
+
+    public async ValueTask DisposeAsync()
+    {
+        if (hubConnection is not null)
+        {
+            await hubConnection.DisposeAsync();
+        }
+    }
+
+    private System.Security.Cryptography.RSAParameters GetKeyParams(string keyString)
+    {
+        var sr = new System.IO.StringReader(keyString);
+        //we need a deserializer
+        var xs = new System.Xml.Serialization.XmlSerializer(typeof(System.Security.Cryptography.RSAParameters));
+        //get the object back from the stream
+        var keyParams = (System.Security.Cryptography.RSAParameters)xs.Deserialize(sr);
+        return keyParams;
+    }
+
+    private string GetKeyString(System.Security.Cryptography.RSAParameters keyParams)
+    {
+        var sw = new System.IO.StringWriter();
+        //we need a serializer
+        var xs = new System.Xml.Serialization.XmlSerializer(typeof(System.Security.Cryptography.RSAParameters));
+        //serialize the key into the stream
+        xs.Serialize(sw, keyParams);
+        //get the string from the stream
+        var keyString = sw.ToString();
+        return keyString;
+    }
+}
